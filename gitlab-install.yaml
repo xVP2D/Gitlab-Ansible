@@ -1,0 +1,30 @@
+- name: Install GitLab CE
+  hosts: gitlab_servers
+  become: true
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Install prerequisites
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - openssh-server
+          - ca-certificates
+          - tzdata
+          - perl
+          - postfix
+        state: present
+
+    - name: Add GitLab package repository
+      ansible.builtin.shell: |
+        curl -sS https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.rpm.sh | bash
+      args:
+        creates: /etc/yum.repos.d/gitlab_gitlab-ce.repo
+
+    - name: Install GitLab CE
+      ansible.builtin.dnf:
+        name: gitlab-ce
+        state: present
+      environment:
+        EXTERNAL_URL: "{{ gitlab_external_url }}"

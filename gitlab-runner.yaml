@@ -1,0 +1,44 @@
+- name: Set up GitLab Runner
+  hosts: gitlab_runners
+  become: true
+  vars_files:
+    - vars.yml
+  vars:
+    runner_token: "{{ lookup('env', 'GITLAB_RUNNER_TOKEN') }}"
+
+  tasks:
+    - name: Add GitLab Runner repository
+      ansible.builtin.shell: |
+        curl -L https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.rpm.sh | bash
+      args:
+        creates: /etc/yum.repos.d/runner_gitlab-runner.repo
+
+    - name: Install GitLab Runner
+      ansible.builtin.dnf:
+        name: gitlab-runner
+        state: present
+
+    - name: Register runner
+      ansible.builtin.shell: |
+        gitlab-runner register \
+          --non-interactive \
+          --url "{{ gitlab_url }}" \
+          --token "{{ runner_token }}" \
+          --executor "docker" \
+          --docker-image "alpine:latest" \
+          --description "ansible-managed-runner-{{ inventory_hostname }}"
+      args:
+        creates: /etc/gitlab-runner/config.toml
+
+    - name: Configure runner concurrency
+      ansible.builtin.lineinfile:
+        path: /etc/gitlab-runner/config.toml
+        regexp: '^concurrent ='
+        line: 'concurrent = {{ runner_concurrency }}'
+      notify: Restart GitLab Runner
+
+  handlers:
+    - name: Restart GitLab Runner
+      ansible.builtin.systemd:
+        name: gitlab-runner
+        state: restarted

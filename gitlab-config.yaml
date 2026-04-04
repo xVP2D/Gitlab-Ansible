@@ -1,0 +1,77 @@
+- name: Configure GitLab
+  hosts: gitlab_servers
+  become: true
+  vars_files:
+    - vars.yml
+  vars:
+    smtp_user: "{{ lookup('env', 'SMTP_USER') }}"
+    smtp_password: "{{ lookup('env', 'SMTP_PASSWORD') }}"
+
+  tasks:
+    - name: Create SSL directory
+      ansible.builtin.file:
+        path: /etc/gitlab/ssl
+        state: directory
+        mode: "0755"
+
+    - name: Generate self-signed SSL certificate for GitLab
+      ansible.builtin.shell: |
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+          -keyout /etc/gitlab/ssl/{{ gitlab_domain }}.key \
+          -out /etc/gitlab/ssl/{{ gitlab_domain }}.crt \
+          -subj "/CN={{ gitlab_domain }}"
+      args:
+        creates: /etc/gitlab/ssl/{{ gitlab_domain }}.crt
+
+    - name: Generate self-signed SSL certificate for Registry
+      ansible.builtin.shell: |
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+          -keyout /etc/gitlab/ssl/registry.{{ gitlab_domain }}.key \
+          -out /etc/gitlab/ssl/registry.{{ gitlab_domain }}.crt \
+          -subj "/CN=registry.{{ gitlab_domain }}"
+      args:
+        creates: /etc/gitlab/ssl/registry.{{ gitlab_domain }}.crt
+
+    - name: Create gitlab.rb from inline content
+      ansible.builtin.copy:
+        content: |
+          # GitLab configuration - managed by Ansible
+          external_url 'https://{{ gitlab_domain }}'
+
+          # SSL
+          letsencrypt['enable'] = false
+          nginx['ssl_certificate'] = "/etc/gitlab/ssl/{{ gitlab_domain }}.crt"
+          nginx['ssl_certificate_key'] = "/etc/gitlab/ssl/{{ gitlab_domain }}.key"
+
+          # SMTP configuration
+          gitlab_rails['smtp_enable'] = true
+          gitlab_rails['smtp_address'] = "{{ smtp_address }}"
+          gitlab_rails['smtp_port'] = {{ smtp_port }}
+          gitlab_rails['smtp_user_name'] = "{{ smtp_user }}"
+          gitlab_rails['smtp_password'] = "{{ smtp_password }}"
+          gitlab_rails['smtp_authentication'] = "login"
+          gitlab_rails['smtp_enable_starttls_auto'] = true
+          gitlab_rails['gitlab_email_from'] = '{{ gitlab_email_from }}'
+
+          # Backup configuration
+          gitlab_rails['backup_keep_time'] = {{ backup_keep_time }}
+          gitlab_rails['backup_path'] = "{{ backup_path }}"
+
+          # Performance tuning
+          puma['worker_processes'] = {{ puma_workers }}
+          postgresql['shared_buffers'] = "{{ postgresql_shared_buffers }}"
+          postgresql['max_worker_processes'] = {{ postgresql_max_worker_processes }}
+
+          # Container Registry
+          registry_external_url 'https://registry.{{ gitlab_domain }}'
+
+          # Monitoring
+          prometheus_monitoring['enable'] = true
+          gitlab_rails['monitoring_whitelist'] = {{ monitoring_whitelist | to_json }}
+        dest: /etc/gitlab/gitlab.rb
+        mode: "0600"
+      notify: Reconfigure GitLab
+
+  handlers:
+    - name: Reconfigure GitLab
+      ansible.builtin.shell: gitlab-ctl reconfigure

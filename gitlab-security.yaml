@@ -1,0 +1,36 @@
+- name: Harden GitLab installation
+  hosts: gitlab_servers
+  become: true
+
+  tasks:
+    - name: Disable sign-up (admin creates accounts)
+      ansible.builtin.shell: |
+        gitlab-rails runner "ApplicationSetting.last.update(signup_enabled: false)"
+      changed_when: false
+
+    - name: Set password requirements
+      ansible.builtin.shell: |
+        gitlab-rails runner "ApplicationSetting.last.update(
+          password_number_required: true,
+          password_uppercase_required: true,
+          password_lowercase_required: true,
+          minimum_password_length: 12
+        )"
+      changed_when: false
+    
+    - name: Configure firewall
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+      loop:
+        - 80/tcp
+        - 443/tcp
+        - 22/tcp
+      notify: Reload firewall
+
+  handlers:
+    - name: Reload firewall
+      ansible.builtin.systemd:
+        name: firewalld
+        state: reloaded

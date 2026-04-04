@@ -1,0 +1,42 @@
+- name: Configure GitLab backups
+  hosts: gitlab_servers
+  become: true
+
+  tasks:
+    - name: Create backup script
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          # GitLab backup script - managed by Ansible
+          set -e
+
+          echo "Starting GitLab backup at $(date)"
+
+          # Create application backup
+          gitlab-backup create CRON=1
+
+          # Backup configuration files
+          tar czf /var/opt/gitlab/backups/gitlab-config-$(date +%Y%m%d).tar.gz \
+            /etc/gitlab/gitlab.rb \
+            /etc/gitlab/gitlab-secrets.json
+
+          # Copy to remote storage
+          if command -v aws &> /dev/null; then
+            aws s3 sync /var/opt/gitlab/backups/ s3://gitlab-backups/$(hostname)/
+          fi
+
+          # Clean old backups (keep 7 days)
+          find /var/opt/gitlab/backups/ -name "*.tar" -mtime +7 -delete
+          find /var/opt/gitlab/backups/ -name "gitlab-config-*.tar.gz" -mtime +7 -delete
+
+          echo "Backup completed at $(date)"
+        dest: /opt/gitlab-backup.sh
+        mode: "0755"
+
+    - name: Schedule daily backup at 2 AM
+      ansible.builtin.cron:
+        name: "GitLab backup"
+        minute: "0"
+        hour: "2"
+        job: "/opt/gitlab-backup.sh >> /var/log/gitlab-backup.log 2>&1"
+        user: root

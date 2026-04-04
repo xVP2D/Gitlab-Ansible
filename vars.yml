@@ -1,0 +1,25 @@
+gitlab_domain: "gitlab.example.com"
+gitlab_external_url: "https://{{ gitlab_domain }}"
+
+gitlab_email_from: "gitlab@example.com"
+
+
+smtp_address: "smtp.example.com"
+smtp_port: 587
+
+
+gitlab_url: "https://{{ gitlab_domain }}"
+runner_concurrency: 4
+
+
+puma_workers: 4
+postgresql_shared_buffers: "512MB"
+postgresql_max_worker_processes: 8
+
+
+backup_keep_time: 604800
+backup_path: "/var/opt/gitlab/backups"
+
+monitoring_whitelist:
+  - "127.0.0.1"
+  - "192.168.122.0/24"

@@ -1,0 +1,42 @@
+- name: Monitor GitLab health
+  hosts: gitlab_servers
+  become: true
+
+  tasks:
+    - name: Check GitLab status
+      ansible.builtin.shell: gitlab-ctl status
+      register: gitlab_status
+      changed_when: false
+
+    - name: Check GitLab health endpoint
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}/-/health"
+        validate_certs: false
+        headers:
+          Host: "gitlab.example.com"
+        status_code: 200
+      register: health_check
+      retries: 10
+      delay: 30
+      until: health_check.status == 200
+
+    - name: Check readiness
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}/-/readiness"
+        validate_certs: false
+        headers:
+          Host: "gitlab.example.com"
+        status_code: 200
+      register: readiness_check
+      retries: 10
+      delay: 30
+      until: readiness_check.status == 200
+
+    - name: Report status
+      ansible.builtin.debug:
+        msg: |
+          GitLab Status:
+          {{ gitlab_status.stdout }}
+
+          Health: {{ health_check.status }}
+          Readiness: {{ readiness_check.status }}
