@@ -12,22 +12,22 @@
 
           echo "Starting GitLab backup at $(date)"
 
-          # Create application backup
-          gitlab-backup create CRON=1
+          # Create application backup via le conteneur
+          podman exec gitlab gitlab-backup create CRON=1
 
           # Backup configuration files
-          tar czf /var/opt/gitlab/backups/gitlab-config-$(date +%Y%m%d).tar.gz \
-            /etc/gitlab/gitlab.rb \
-            /etc/gitlab/gitlab-secrets.json
+          tar czf /srv/gitlab/data/backups/gitlab-config-$(date +%Y%m%d).tar.gz \
+            /srv/gitlab/config/gitlab.rb \
+            /srv/gitlab/config/gitlab-secrets.json
 
           # Copy to remote storage
           if command -v aws &> /dev/null; then
-            aws s3 sync /var/opt/gitlab/backups/ s3://gitlab-backups/$(hostname)/
+            aws s3 sync /srv/gitlab/data/backups/ s3://gitlab-backups/$(hostname)/
           fi
 
           # Clean old backups (keep 7 days)
-          find /var/opt/gitlab/backups/ -name "*.tar" -mtime +7 -delete
-          find /var/opt/gitlab/backups/ -name "gitlab-config-*.tar.gz" -mtime +7 -delete
+          find /srv/gitlab/data/backups/ -name "*.tar" -mtime +7 -delete
+          find /srv/gitlab/data/backups/ -name "gitlab-config-*.tar.gz" -mtime +7 -delete
 
           echo "Backup completed at $(date)"
         dest: /opt/gitlab-backup.sh

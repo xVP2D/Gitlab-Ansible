@@ -10,27 +10,27 @@
   tasks:
     - name: Create SSL directory
       ansible.builtin.file:
-        path: /etc/gitlab/ssl
+        path: "{{ gitlab_config_dir }}/ssl"
         state: directory
         mode: "0755"
 
     - name: Generate self-signed SSL certificate for GitLab
       ansible.builtin.shell: |
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-          -keyout /etc/gitlab/ssl/{{ gitlab_domain }}.key \
-          -out /etc/gitlab/ssl/{{ gitlab_domain }}.crt \
+          -keyout {{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.key \
+          -out {{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt \
           -subj "/CN={{ gitlab_domain }}"
       args:
-        creates: /etc/gitlab/ssl/{{ gitlab_domain }}.crt
+        creates: "{{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt"
 
     - name: Generate self-signed SSL certificate for Registry
       ansible.builtin.shell: |
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-          -keyout /etc/gitlab/ssl/registry.{{ gitlab_domain }}.key \
-          -out /etc/gitlab/ssl/registry.{{ gitlab_domain }}.crt \
+          -keyout {{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.key \
+          -out {{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt \
           -subj "/CN=registry.{{ gitlab_domain }}"
       args:
-        creates: /etc/gitlab/ssl/registry.{{ gitlab_domain }}.crt
+        creates: "{{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt"
 
     - name: Create gitlab.rb from inline content
       ansible.builtin.copy:
@@ -55,7 +55,7 @@
 
           # Backup configuration
           gitlab_rails['backup_keep_time'] = {{ backup_keep_time }}
-          gitlab_rails['backup_path'] = "{{ backup_path }}"
+          gitlab_rails['backup_path'] = "/var/opt/gitlab/backups"
 
           # Performance tuning
           puma['worker_processes'] = {{ puma_workers }}
@@ -70,10 +70,19 @@
           prometheus['listen_address'] = '0.0.0.0:9091'
 
           gitlab_rails['monitoring_whitelist'] = {{ monitoring_whitelist | to_json }}
-        dest: /etc/gitlab/gitlab.rb
+
+          # Security
+          gitlab_rails['signup_enabled'] = false
+        dest: "{{ gitlab_config_dir }}/gitlab.rb"
         mode: "0600"
       notify: Reconfigure GitLab
 
   handlers:
     - name: Reconfigure GitLab
-      ansible.builtin.shell: gitlab-ctl reconfigure
+      ansible.builtin.shell: |
+        systemctl stop gitlab
+        podman rm -f gitlab 2>/dev/null || true
+        sleep 15
+        rm -f {{ gitlab_data_dir }}/postgresql/postmaster.pid
+        systemctl start gitlab
+      changed_when: true

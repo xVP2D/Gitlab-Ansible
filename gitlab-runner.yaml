@@ -7,38 +7,95 @@
     runner_token: "{{ lookup('env', 'GITLAB_RUNNER_TOKEN') }}"
 
   tasks:
-    - name: Add GitLab Runner repository
-      ansible.builtin.shell: |
-        curl -L https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.rpm.sh | bash
-      args:
-        creates: /etc/yum.repos.d/runner_gitlab-runner.repo
-
-    - name: Install GitLab Runner
+    - name: Install Podman and SELinux tools
       ansible.builtin.dnf:
-        name: gitlab-runner
+        name:
+          - podman
+          - policycoreutils-python-utils
         state: present
+
+    - name: Enable Podman socket
+      ansible.builtin.systemd:
+        name: podman.socket
+        enabled: true
+        state: started
+
+    - name: Create GitLab Runner config directory
+      ansible.builtin.file:
+        path: "{{ gitlab_runner_config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Apply SELinux context on Runner config directory
+      ansible.builtin.command: >
+        semanage fcontext -a -t container_file_t "{{ gitlab_runner_config_dir }}(/.*)?"
+      changed_when: true
+
+    - name: Restore SELinux context on Runner config directory
+      ansible.builtin.command: restorecon -Rv "{{ gitlab_runner_config_dir }}"
+      changed_when: true
 
     - name: Register runner
       ansible.builtin.shell: |
-        gitlab-runner register \
+        podman run --rm \
+          -v {{ gitlab_runner_config_dir }}:/etc/gitlab-runner:Z \
+          {{ gitlab_runner_image }} register \
           --non-interactive \
           --url "{{ gitlab_url }}" \
           --token "{{ runner_token }}" \
           --executor "docker" \
           --docker-image "alpine:latest" \
+          --docker-volumes "/run/podman/podman.sock:/var/run/docker.sock" \
           --description "ansible-managed-runner-{{ inventory_hostname }}"
       args:
-        creates: /etc/gitlab-runner/config.toml
+        creates: "{{ gitlab_runner_config_dir }}/config.toml"
 
     - name: Configure runner concurrency
       ansible.builtin.lineinfile:
-        path: /etc/gitlab-runner/config.toml
+        path: "{{ gitlab_runner_config_dir }}/config.toml"
         regexp: '^concurrent ='
         line: 'concurrent = {{ runner_concurrency }}'
       notify: Restart GitLab Runner
+
+    - name: Create Quadlet directory
+      ansible.builtin.file:
+        path: /etc/containers/systemd
+        state: directory
+        mode: "0755"
+
+    - name: Deploy GitLab Runner Quadlet container unit
+      ansible.builtin.copy:
+        dest: /etc/containers/systemd/gitlab-runner.container
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=GitLab Runner Container
+          After=network-online.target podman.socket
+          Wants=network-online.target
+
+          [Container]
+          Image={{ gitlab_runner_image }}
+          ContainerName=gitlab-runner
+          Volume={{ gitlab_runner_config_dir }}:/etc/gitlab-runner:Z
+          Volume=/run/podman/podman.sock:/var/run/docker.sock:Z
+          Label=io.containers.autoupdate=registry
+
+          [Service]
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd and start GitLab Runner
 
   handlers:
     - name: Restart GitLab Runner
       ansible.builtin.systemd:
         name: gitlab-runner
         state: restarted
+
+    - name: Reload systemd and start GitLab Runner
+      ansible.builtin.systemd:
+        name: gitlab-runner
+        enabled: true
+        state: started
+        daemon_reload: true

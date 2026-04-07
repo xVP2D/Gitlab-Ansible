@@ -18,8 +18,17 @@ postgresql_max_worker_processes: 8
 
 
 backup_keep_time: 604800
-backup_path: "/var/opt/gitlab/backups"
+backup_path: "/srv/gitlab/data/backups"
 
 monitoring_whitelist:
   - "127.0.0.1"
   - "192.168.122.0/24"
+
+# Podman / Conteneurs
+gitlab_image: "docker.io/gitlab/gitlab-ce:latest"
+gitlab_runner_image: "docker.io/gitlab/gitlab-runner:latest"
+gitlab_config_dir: "/srv/gitlab/config"
+gitlab_logs_dir: "/srv/gitlab/logs"
+gitlab_data_dir: "/srv/gitlab/data"
+gitlab_runner_config_dir: "/srv/gitlab-runner/config"
+gitlab_ssh_port: 2222

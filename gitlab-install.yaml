@@ -14,17 +14,134 @@
           - tzdata
           - perl
           - postfix
+          - podman
+          - policycoreutils-python-utils
         state: present
 
-    - name: Add GitLab package repository
+    - name: Enable Podman socket
+      ansible.builtin.systemd:
+        name: podman.socket
+        enabled: true
+        state: started
+
+    - name: Create GitLab volume directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ gitlab_config_dir }}"
+        - "{{ gitlab_logs_dir }}"
+        - "{{ gitlab_data_dir }}"
+
+    - name: Apply SELinux context on GitLab volume directories
+      ansible.builtin.command: >
+        semanage fcontext -a -t container_file_t "{{ item }}(/.*)?"
+      loop:
+        - "{{ gitlab_config_dir }}"
+        - "{{ gitlab_logs_dir }}"
+        - "{{ gitlab_data_dir }}"
+      changed_when: true
+
+    - name: Restore SELinux context on GitLab volumes
+      ansible.builtin.command: restorecon -Rv "{{ item }}"
+      loop:
+        - "{{ gitlab_config_dir }}"
+        - "{{ gitlab_logs_dir }}"
+        - "{{ gitlab_data_dir }}"
+      changed_when: true
+
+    - name: Create Quadlet directory
+      ansible.builtin.file:
+        path: /etc/containers/systemd
+        state: directory
+        mode: "0755"
+
+    - name: Deploy GitLab CE Quadlet container unit
+      ansible.builtin.copy:
+        dest: /etc/containers/systemd/gitlab.container
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=GitLab CE Container
+          After=network-online.target
+          Wants=network-online.target
+
+          [Container]
+          Image={{ gitlab_image }}
+          ContainerName=gitlab
+          PublishPort=80:80
+          PublishPort=443:443
+          PublishPort={{ gitlab_ssh_port }}:22
+          Volume={{ gitlab_config_dir }}:/etc/gitlab:Z
+          Volume={{ gitlab_logs_dir }}:/var/log/gitlab:Z
+          Volume={{ gitlab_data_dir }}:/var/opt/gitlab:Z
+          Label=io.containers.autoupdate=registry
+
+          [Service]
+          Restart=always
+          TimeoutStartSec=900
+          TimeoutStopSec=120
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+      changed_when: false
+
+    - name: Stop host GitLab package installation if present
       ansible.builtin.shell: |
-        curl -sS https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.rpm.sh | bash
-      args:
-        creates: /etc/yum.repos.d/gitlab_gitlab-ce.repo
+        if command -v gitlab-ctl &>/dev/null; then
+          gitlab-ctl stop || true
+        fi
+        systemctl stop gitlab-runsvdir 2>/dev/null || true
+        systemctl disable gitlab-runsvdir 2>/dev/null || true
+      changed_when: false
+      failed_when: false
 
-    - name: Install GitLab CE
-      ansible.builtin.dnf:
-        name: gitlab-ce
-        state: present
-      environment:
-        EXTERNAL_URL: "{{ gitlab_external_url }}"
+    - name: Wipe old GitLab data from host installation (incompatible with container)
+      ansible.builtin.shell: find {{ item }} -mindepth 1 -delete 2>/dev/null || true
+      changed_when: false
+      loop:
+        - "{{ gitlab_data_dir }}"
+        - "{{ gitlab_logs_dir }}"
+
+    - name: Stop GitLab Quadlet service via systemd (prevents auto-restart)
+      ansible.builtin.systemd:
+        name: gitlab
+        state: stopped
+      failed_when: false
+
+    - name: Force stop and remove GitLab container
+      ansible.builtin.shell: |
+        podman stop --time 60 gitlab 2>/dev/null || true
+        podman rm -f gitlab 2>/dev/null || true
+      changed_when: false
+
+    - name: Wait for port 443 to be released (up to 120s)
+      ansible.builtin.wait_for:
+        port: 443
+        state: stopped
+        timeout: 120
+      ignore_errors: true
+
+    - name: Remove stale PostgreSQL lock files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ gitlab_data_dir }}/postgresql/postmaster.pid"
+        - "{{ gitlab_data_dir }}/postgresql/.s.PGSQL.5432"
+        - "{{ gitlab_data_dir }}/postgresql/.s.PGSQL.5432.lock"
+
+    - name: Reset failed GitLab service state
+      ansible.builtin.shell: systemctl reset-failed gitlab || true
+      changed_when: false
+
+    - name: Ensure GitLab service is started and enabled
+      ansible.builtin.systemd:
+        name: gitlab
+        enabled: true
+        state: started

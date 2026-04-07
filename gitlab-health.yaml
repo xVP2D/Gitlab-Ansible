@@ -3,8 +3,8 @@
   become: true
 
   tasks:
-    - name: Check GitLab status
-      ansible.builtin.shell: gitlab-ctl status
+    - name: Check GitLab container status
+      ansible.builtin.command: podman ps --filter name=gitlab --format "{{ '{{' }}.Status{{ '}}' }}"
       register: gitlab_status
       changed_when: false
 
@@ -13,29 +13,33 @@
         url: "https://{{ ansible_host }}/-/health"
         validate_certs: false
         headers:
-          Host: "gitlab.example.com"
+          Host: "{{ gitlab_domain }}"
         status_code: 200
       register: health_check
       retries: 10
       delay: 30
       until: health_check.status == 200
+      vars:
+        gitlab_domain: "{{ hostvars[inventory_hostname]['gitlab_domain'] | default('gitlab.example.com') }}"
 
     - name: Check readiness
       ansible.builtin.uri:
         url: "https://{{ ansible_host }}/-/readiness"
         validate_certs: false
         headers:
-          Host: "gitlab.example.com"
+          Host: "{{ gitlab_domain }}"
         status_code: 200
       register: readiness_check
       retries: 10
       delay: 30
       until: readiness_check.status == 200
+      vars:
+        gitlab_domain: "{{ hostvars[inventory_hostname]['gitlab_domain'] | default('gitlab.example.com') }}"
 
     - name: Report status
       ansible.builtin.debug:
         msg: |
-          GitLab Status:
+          GitLab Container Status:
           {{ gitlab_status.stdout }}
 
           Health: {{ health_check.status }}

@@ -3,21 +3,37 @@
   become: true
 
   tasks:
-    - name: Disable sign-up (admin creates accounts)
-      ansible.builtin.shell: |
-        gitlab-rails runner "ApplicationSetting.last.update(signup_enabled: false)"
+    - name: Wait for PostgreSQL socket to be ready inside container
+      ansible.builtin.shell: podman exec gitlab test -S /var/opt/gitlab/postgresql/.s.PGSQL.5432
+      register: pg_socket_check
+      retries: 30
+      delay: 20
+      until: pg_socket_check.rc == 0
       changed_when: false
 
-    - name: Set password requirements
+    - name: Set password complexity requirements via DB
       ansible.builtin.shell: |
-        gitlab-rails runner "ApplicationSetting.last.update(
-          password_number_required: true,
-          password_uppercase_required: true,
-          password_lowercase_required: true,
-          minimum_password_length: 12
-        )"
+        podman exec gitlab gitlab-psql -d gitlabhq_production -c \
+          "UPDATE application_settings SET
+            password_number_required = true,
+            password_uppercase_required = true,
+            password_lowercase_required = true,
+            minimum_password_length = 12
+          WHERE id = (SELECT max(id) FROM application_settings);"
       changed_when: false
-    
+      retries: 5
+      delay: 20
+      register: psql_result
+      until: psql_result.rc == 0
+
+    - name: Allow Podman to manage cgroups (SELinux)
+      ansible.builtin.command: setsebool -P container_manage_cgroup true
+      changed_when: true
+
+    - name: Allow Podman containers to connect to the network (SELinux)
+      ansible.builtin.command: setsebool -P container_connect_any true
+      changed_when: true
+
     - name: Configure firewall
       ansible.posix.firewalld:
         port: "{{ item }}"
@@ -27,6 +43,7 @@
         - 80/tcp
         - 443/tcp
         - 22/tcp
+        - 2222/tcp
       notify: Reload firewall
 
   handlers:
