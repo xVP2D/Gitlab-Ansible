@@ -67,6 +67,8 @@
 
           # Monitoring
           prometheus_monitoring['enable'] = true
+          prometheus['listen_address'] = '0.0.0.0:9091'
+
           gitlab_rails['monitoring_whitelist'] = {{ monitoring_whitelist | to_json }}
         dest: /etc/gitlab/gitlab.rb
         mode: "0600"
