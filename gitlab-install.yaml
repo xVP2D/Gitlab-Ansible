@@ -1,3 +1,32 @@
+- name: Configure timezone and NTP on all hosts
+  hosts: all
+  become: true
+  tasks:
+    - name: Set timezone to Europe/Paris
+      ansible.builtin.shell: |
+        current=$(timedatectl show --property=Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)
+        if [ "$current" != "Europe/Paris" ]; then
+          timedatectl set-timezone Europe/Paris
+          echo "changed"
+        fi
+      register: tz_result
+      changed_when: "'changed' in tz_result.stdout"
+
+    - name: Install chrony for NTP sync
+      ansible.builtin.dnf:
+        name: chrony
+        state: present
+
+    - name: Enable and start chronyd
+      ansible.builtin.systemd:
+        name: chronyd
+        enabled: true
+        state: started
+
+    - name: Force immediate NTP time sync
+      ansible.builtin.shell: chronyc makestep
+      changed_when: false
+
 - name: Install GitLab CE
   hosts: gitlab_servers
   become: true

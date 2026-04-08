@@ -4,9 +4,83 @@
   vars_files:
     - vars.yml
   vars:
-    runner_token: "{{ lookup('env', 'GITLAB_RUNNER_TOKEN') }}"
+    gitlab_server_ip: "{{ hostvars[groups['gitlab_servers'][0]]['ansible_host'] | default(groups['gitlab_servers'][0]) }}"
+    runner_token_env: "{{ lookup('env', 'GITLAB_RUNNER_TOKEN') }}"
 
   tasks:
+    - name: Get GitLab initial root password from container
+      ansible.builtin.shell: |
+        podman exec gitlab cat /etc/gitlab/initial_root_password | grep '^Password:' | awk '{print $2}'
+      delegate_to: "{{ groups['gitlab_servers'][0] }}"
+      register: gitlab_root_password
+      changed_when: false
+      no_log: true
+      when: runner_token_env == ""
+
+    - name: Wait for GitLab to be fully ready (health check)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1/-/health"
+        headers:
+          Host: "{{ gitlab_domain }}"
+        validate_certs: false
+        status_code: 200
+      register: health_check
+      retries: 40
+      delay: 30
+      until: health_check.status == 200
+      delegate_to: "{{ groups['gitlab_servers'][0] }}"
+      become: false
+      when: runner_token_env == ""
+
+    - name: Create temporary admin PAT via GitLab Rails
+      ansible.builtin.shell: |
+        podman exec gitlab gitlab-rails runner \
+          "u = User.find(1);
+           u.personal_access_tokens.find_by(name: 'ansible-runner-bootstrap-{{ inventory_hostname }}')&.revoke!;
+           t = u.personal_access_tokens.create!(
+             name: 'ansible-runner-bootstrap-{{ inventory_hostname }}',
+             scopes: ['api'],
+             expires_at: 1.day.from_now
+           );
+           puts t.token"
+      delegate_to: "{{ groups['gitlab_servers'][0] }}"
+      register: gitlab_admin_pat
+      changed_when: true
+      when: runner_token_env == ""
+
+    - name: Create runner via GitLab API using PAT
+      ansible.builtin.uri:
+        url: "https://127.0.0.1/api/v4/user/runners"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_pat.stdout | trim }}"
+          Host: "{{ gitlab_domain }}"
+        body_format: json
+        body:
+          runner_type: "instance_type"
+          description: "ansible-managed-runner-{{ inventory_hostname }}"
+        validate_certs: false
+        status_code: 201
+      register: gitlab_runner_api
+      delegate_to: "{{ groups['gitlab_servers'][0] }}"
+      become: false
+      when: runner_token_env == ""
+
+    - name: Revoke temporary admin PAT
+      ansible.builtin.shell: |
+        podman exec gitlab gitlab-rails runner \
+          "PersonalAccessToken.find_by(name: 'ansible-runner-bootstrap-{{ inventory_hostname }}')&.revoke!"
+      delegate_to: "{{ groups['gitlab_servers'][0] }}"
+      changed_when: true
+      when: runner_token_env == ""
+
+    - name: Set runner token
+      ansible.builtin.set_fact:
+        runner_token: >-
+          {{ runner_token_env if runner_token_env != ""
+             else gitlab_runner_api.json.token }}
+
+
     - name: Install Podman and SELinux tools
       ansible.builtin.dnf:
         name:
@@ -22,9 +96,24 @@
 
     - name: Create GitLab Runner config directory
       ansible.builtin.file:
-        path: "{{ gitlab_runner_config_dir }}"
+        path: "{{ item }}"
         state: directory
         mode: "0755"
+      loop:
+        - "{{ gitlab_runner_config_dir }}"
+        - "{{ gitlab_runner_config_dir }}/certs"
+
+    - name: Fetch GitLab SSL certificate from GitLab server
+      ansible.builtin.slurp:
+        src: "{{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt"
+      delegate_to: "{{ groups['gitlab_servers'][0] }}"
+      register: gitlab_ssl_cert
+
+    - name: Install GitLab SSL certificate for runner TLS verification
+      ansible.builtin.copy:
+        content: "{{ gitlab_ssl_cert.content | b64decode }}"
+        dest: "{{ gitlab_runner_config_dir }}/certs/{{ gitlab_domain }}.crt"
+        mode: "0644"
 
     - name: Apply SELinux context on Runner config directory
       ansible.builtin.command: >
@@ -39,6 +128,7 @@
       ansible.builtin.shell: |
         podman run --rm \
           -v {{ gitlab_runner_config_dir }}:/etc/gitlab-runner:Z \
+          --add-host "{{ gitlab_domain }}:{{ gitlab_server_ip }}" \
           {{ gitlab_runner_image }} register \
           --non-interactive \
           --url "{{ gitlab_url }}" \
@@ -55,7 +145,7 @@
         path: "{{ gitlab_runner_config_dir }}/config.toml"
         regexp: '^concurrent ='
         line: 'concurrent = {{ runner_concurrency }}'
-      notify: Restart GitLab Runner
+      notify: Reload systemd and start GitLab Runner
 
     - name: Create Quadlet directory
       ansible.builtin.file:
@@ -79,6 +169,7 @@
           Volume={{ gitlab_runner_config_dir }}:/etc/gitlab-runner:Z
           Volume=/run/podman/podman.sock:/var/run/docker.sock:Z
           Label=io.containers.autoupdate=registry
+          AddHost={{ gitlab_domain }}:{{ gitlab_server_ip }}
 
           [Service]
           Restart=always
@@ -88,14 +179,9 @@
       notify: Reload systemd and start GitLab Runner
 
   handlers:
-    - name: Restart GitLab Runner
-      ansible.builtin.systemd:
-        name: gitlab-runner
-        state: restarted
-
     - name: Reload systemd and start GitLab Runner
-      ansible.builtin.systemd:
-        name: gitlab-runner
-        enabled: true
-        state: started
-        daemon_reload: true
+      ansible.builtin.shell: |
+        systemctl daemon-reload
+        systemctl enable gitlab-runner
+        systemctl restart gitlab-runner || systemctl start gitlab-runner
+      changed_when: true

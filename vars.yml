@@ -1,10 +1,10 @@
-gitlab_domain: "gitlab.example.com"
+gitlab_domain: "gitlab.cyberbaby.lan"
 gitlab_external_url: "https://{{ gitlab_domain }}"
 
-gitlab_email_from: "gitlab@example.com"
+gitlab_email_from: "gitlab.cyberbaby@gmail.com"
 
 
-smtp_address: "smtp.example.com"
+smtp_address: "smtp.cyberbaby.com"
 smtp_port: 587
 
 
@@ -22,7 +22,8 @@ backup_path: "/srv/gitlab/data/backups"
 
 monitoring_whitelist:
   - "127.0.0.1"
-  - "192.168.122.0/24"
+  - "192.168.20.0/24"
+  - "10.88.0.0/16"
 
 # Podman / Conteneurs
 gitlab_image: "docker.io/gitlab/gitlab-ce:latest"

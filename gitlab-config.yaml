@@ -14,23 +14,39 @@
         state: directory
         mode: "0755"
 
+    - name: Check GitLab SSL certificate has SAN
+      ansible.builtin.shell: |
+        openssl x509 -in {{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt -text -noout 2>/dev/null | grep -q "Subject Alternative Name"
+      register: gitlab_cert_san_check
+      changed_when: false
+      failed_when: false
+
     - name: Generate self-signed SSL certificate for GitLab
       ansible.builtin.shell: |
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
           -keyout {{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.key \
           -out {{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt \
-          -subj "/CN={{ gitlab_domain }}"
-      args:
-        creates: "{{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt"
+          -subj "/CN={{ gitlab_domain }}" \
+          -addext "subjectAltName=DNS:{{ gitlab_domain }}"
+      when: gitlab_cert_san_check.rc != 0
+      notify: Reconfigure GitLab
+
+    - name: Check Registry SSL certificate has SAN
+      ansible.builtin.shell: |
+        openssl x509 -in {{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt -text -noout 2>/dev/null | grep -q "Subject Alternative Name"
+      register: registry_cert_san_check
+      changed_when: false
+      failed_when: false
 
     - name: Generate self-signed SSL certificate for Registry
       ansible.builtin.shell: |
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
           -keyout {{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.key \
           -out {{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt \
-          -subj "/CN=registry.{{ gitlab_domain }}"
-      args:
-        creates: "{{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt"
+          -subj "/CN=registry.{{ gitlab_domain }}" \
+          -addext "subjectAltName=DNS:registry.{{ gitlab_domain }}"
+      when: registry_cert_san_check.rc != 0
+      notify: Reconfigure GitLab
 
     - name: Create gitlab.rb from inline content
       ansible.builtin.copy:
