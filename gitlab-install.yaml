@@ -17,15 +17,31 @@
         name: chrony
         state: present
 
-    - name: Enable and start chronyd
+    - name: Configure chrony to use pfSense NTP server
+      ansible.builtin.copy:
+        dest: /etc/chrony.conf
+        mode: "0644"
+        content: |
+          server 192.168.20.1 iburst
+          driftfile /var/lib/chrony/drift
+          makestep 1.0 3
+          rtcsync
+          logdir /var/log/chrony
+
+    - name: Enable and restart chronyd
       ansible.builtin.systemd:
         name: chronyd
         enabled: true
-        state: started
+        state: restarted
 
-    - name: Force immediate NTP time sync
-      ansible.builtin.shell: chronyc makestep
+    - name: Wait for NTP synchronization
+      ansible.builtin.shell: chronyc tracking | grep -q "^Reference ID"
+      register: ntp_sync
+      retries: 15
+      delay: 2
+      until: ntp_sync.rc == 0
       changed_when: false
+      failed_when: false
 
 - name: Install GitLab CE
   hosts: gitlab_servers

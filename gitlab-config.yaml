@@ -14,10 +14,14 @@
         state: directory
         mode: "0755"
 
-    - name: Check GitLab SSL certificate has SAN
+    - name: Check GitLab SSL certificate validity (SAN + notBefore)
       ansible.builtin.shell: |
-        openssl x509 -in {{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt -text -noout 2>/dev/null | grep -q "Subject Alternative Name"
-      register: gitlab_cert_san_check
+        cert="{{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt"
+        [ -f "$cert" ] || exit 1
+        openssl x509 -in "$cert" -text -noout 2>/dev/null | grep -q "Subject Alternative Name" || exit 1
+        not_before=$(openssl x509 -in "$cert" -noout -startdate 2>/dev/null | cut -d= -f2)
+        [ $(date +%s) -ge $(date -d "$not_before" +%s 2>/dev/null || echo 9999999999) ] || exit 1
+      register: gitlab_cert_check
       changed_when: false
       failed_when: false
 
@@ -28,13 +32,17 @@
           -out {{ gitlab_config_dir }}/ssl/{{ gitlab_domain }}.crt \
           -subj "/CN={{ gitlab_domain }}" \
           -addext "subjectAltName=DNS:{{ gitlab_domain }}"
-      when: gitlab_cert_san_check.rc != 0
+      when: gitlab_cert_check.rc != 0
       notify: Reconfigure GitLab
 
-    - name: Check Registry SSL certificate has SAN
+    - name: Check Registry SSL certificate validity (SAN + notBefore)
       ansible.builtin.shell: |
-        openssl x509 -in {{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt -text -noout 2>/dev/null | grep -q "Subject Alternative Name"
-      register: registry_cert_san_check
+        cert="{{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt"
+        [ -f "$cert" ] || exit 1
+        openssl x509 -in "$cert" -text -noout 2>/dev/null | grep -q "Subject Alternative Name" || exit 1
+        not_before=$(openssl x509 -in "$cert" -noout -startdate 2>/dev/null | cut -d= -f2)
+        [ $(date +%s) -ge $(date -d "$not_before" +%s 2>/dev/null || echo 9999999999) ] || exit 1
+      register: registry_cert_check
       changed_when: false
       failed_when: false
 
@@ -45,7 +53,7 @@
           -out {{ gitlab_config_dir }}/ssl/registry.{{ gitlab_domain }}.crt \
           -subj "/CN=registry.{{ gitlab_domain }}" \
           -addext "subjectAltName=DNS:registry.{{ gitlab_domain }}"
-      when: registry_cert_san_check.rc != 0
+      when: registry_cert_check.rc != 0
       notify: Reconfigure GitLab
 
     - name: Create gitlab.rb from inline content
